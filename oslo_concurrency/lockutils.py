@@ -25,38 +25,17 @@ import threading
 import weakref
 
 import fasteners
-from oslo_config import cfg
+
 from oslo_utils import reflection
-from oslo_utils import timeutils
+from monotonic import monotonic as monotonic_now
+
+import config as cfg
 import six
 
 from oslo_concurrency._i18n import _, _LI
 
-
 LOG = logging.getLogger(__name__)
-
-
-_opts = [
-    cfg.BoolOpt('disable_process_locking', default=False,
-                help='Enables or disables inter-process locks.',
-                deprecated_group='DEFAULT'),
-    cfg.StrOpt('lock_path',
-               default=os.environ.get("OSLO_LOCK_PATH"),
-               help='Directory to use for lock files.  For security, the '
-                    'specified directory should only be writable by the user '
-                    'running the processes that need locking. '
-                    'Defaults to environment variable OSLO_LOCK_PATH. '
-                    'If external locks are used, a lock path must be set.',
-               deprecated_group='DEFAULT')
-]
-
-
-def _register_opts(conf):
-    conf.register_opts(_opts, group='oslo_concurrency')
-
-
-CONF = cfg.CONF
-_register_opts(CONF)
+CONF = cfg  # alias
 
 
 def set_defaults(lock_path):
@@ -64,7 +43,7 @@ def set_defaults(lock_path):
 
     This can be used by tests to set lock_path to a temporary directory.
     """
-    cfg.set_defaults(_opts, lock_path=lock_path)
+    cfg.oslo_concurrency.lock_path = lock_path
 
 
 def get_lock_path(conf):
@@ -75,7 +54,6 @@ def get_lock_path(conf):
 
     .. versionadded:: 1.8
     """
-    _register_opts(conf)
     return conf.oslo_concurrency.lock_path
 
 
@@ -134,7 +112,7 @@ def _get_lock_path(name, lock_file_prefix, lock_path=None):
         sep = '' if lock_file_prefix.endswith('-') else '-'
         name = '%s%s%s' % (lock_file_prefix, sep, name)
 
-    local_lock_path = lock_path or CONF.oslo_concurrency.lock_path
+    local_lock_path = lock_path or cfg.oslo_concurrency.lock_path
 
     if not local_lock_path:
         raise cfg.RequiredOptError('lock_path')
@@ -211,7 +189,7 @@ def lock(name, lock_file_prefix=None, external=False, lock_path=None,
         if do_log:
             LOG.debug('Acquired semaphore "%(lock)s"', {'lock': name})
         try:
-            if external and not CONF.oslo_concurrency.disable_process_locking:
+            if external and not cfg.oslo_concurrency.disable_process_locking:
                 ext_lock = external_lock(name, lock_file_prefix, lock_path)
                 ext_lock.acquire(delay=delay)
                 try:
@@ -257,12 +235,12 @@ def synchronized(name, lock_file_prefix=None, external=False, lock_path=None,
 
         @six.wraps(f)
         def inner(*args, **kwargs):
-            t1 = timeutils.now()
+            t1 = monotonic_now()
             t2 = None
             try:
                 with lock(name, lock_file_prefix, external, lock_path,
                           do_log=False, semaphores=semaphores, delay=delay):
-                    t2 = timeutils.now()
+                    t2 = monotonic_now()
                     LOG.debug('Lock "%(name)s" acquired by "%(function)s" :: '
                               'waited %(wait_secs)0.3fs',
                               {'name': name,
@@ -270,7 +248,7 @@ def synchronized(name, lock_file_prefix=None, external=False, lock_path=None,
                                'wait_secs': (t2 - t1)})
                     return f(*args, **kwargs)
             finally:
-                t3 = timeutils.now()
+                t3 = monotonic_now()
                 if t2 is None:
                     held_secs = "N/A"
                 else:
